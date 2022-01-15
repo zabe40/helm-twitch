@@ -6,7 +6,7 @@
 ;; URL: https://github.com/atheriel/helm-twitch
 ;; Keywords: games, comm
 ;; Version: 0.2
-;; Package-Requires: ((dash "2.11.0") (emacs "24.3"))
+;; Package-Requires: ((emacs "25.1"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -28,7 +28,6 @@
 ;;; Code:
 
 (require 'url)
-(require 'dash)
 (require 'json)
 (require 'tabulated-list)
 
@@ -146,7 +145,7 @@ If you want to use your own, you can register for one at
 			(nth 1 (split-string (format "%s" (nth 0 entry)) ":")))
 		       "="
 		       (url-hexify-string (format "%s" (nth 1 entry)))))
-	     (-partition 2 plist) "&"))
+	     (seq-partition plist 2) "&"))
 
 (defun twitch-api-url-from-login (login)
   "Return the url to the twitch stream given by LOGIN."
