@@ -1,6 +1,12 @@
-;;; twitch-api.el --- An elisp interface for the Twitch.tv API
+;;; twitch-api.el --- An elisp interface for the Twitch.tv API -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2015-2016 Aaron Jacobs
+
+;; Author: Aaron Jacobs <atheriel@gmail.com>
+;; URL: https://github.com/atheriel/helm-twitch
+;; Keywords: games, comm
+;; Version: 0.2
+;; Package-Requires: ((dash "2.11.0") (emacs "24.3"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -29,28 +35,96 @@
 (defconst twitch-api-version "0.2"
   "Version of this package to advertise in the User-Agent string.")
 
-(defcustom twitch-api-game-filter nil
-  "If specified, limits the search to those streaming this game."
-  :version 0.1
-  :type 'string)
+(defvar twitch-api-base-url "https://api.twitch.tv/helix/"
+  "URL prefix for twitch api calls.")
 
-(defcustom twitch-api-username nil
-  "A Twitch.tv username, for connecting to Twitch chat."
+(defvar twitch-api-oauth-url "https://id.twitch.tv/oauth2/authorize"
+  "URL for twitch oauth process.")
+
+(defvar twitch-api-game-filter-id nil
+  "The game ID associated with `twitch-api-game-filter'.
+
+A Twitch game ID is a unique identifier for a particular game,
+and is used instead of the game name in API calls.")
+
+(defun twitch-api-set-game-filter (symbol game)
+  "Set SYMBOL (defaulting to `twitch-api-game-filter') to GAME.
+If necessary, invalidate `twitch-api-game-filter-id'."
+  (cl-assert (or (null game)
+		 (equal 'string (type-of game)))
+	     t)
+  (setf symbol (or symbol 'twitch-api-game-filter))
+  ;; The first time this is called on `twitch-api-game-filter', it
+  ;; will not have been assigned a value yet, so in this case just set
+  ;; it unconditionally.
+  (condition-case err
+      (when (not (equal game (symbol-value symbol)))
+	(set symbol game)
+	(setf twitch-api-game-filter-id nil))
+    (void-variable (set symbol game)))
+  game)
+
+(defcustom twitch-api-game-filter nil
+  "If specified, limits the search to those streaming this game.
+Changing this variable invalidates `twitch-api-game-filter-id',
+which is handled by `twitch-api-set-game-filter'."
   :group 'helm-twitch
-  :type 'string)
+  :set #'twitch-api-set-game-filter
+  :type '(choice (const :tag "All games" nil)
+		 string))
+
+(defvar twitch-api-user-id nil
+  "The user ID associated with `twitch-api-username'.
+
+A Twtich user ID is a unique identifier for a twitch user, which
+is used instead of the username in API calls. For more
+information see URL
+`https://dev.twitch.tv/docs/v5#translating-from-user-names-to-user-ids'.")
 
 (defcustom twitch-api-oauth-token nil
   "The OAuth token for the Twitch.tv username in `twitch-api-username'.
 
-To retrieve an OAuth token, check out `http://twitchapps.com/tmi/'."
+To retrieve an OAuth token, call `twitch-api-authenticate', or
+visit URL `https://twitchapps.com/tmi/'."
   :group 'helm-twitch
   :type 'string)
+
+(defun twitch-api-set-username (symbol username &optional new-oauth-token)
+  "Set SYMBOL (defaulting to `twitch-api-username') to USERNAME.
+If necessary, invalidate `twitch-api-user-id' and
+`twitch-api-oauth-token'.
+
+If NEW-OAUTH-TOKEN is given, set that."
+  (cl-assert (or (null username)
+		 (equal 'string (type-of username)))
+	     t)
+  (setf symbol (or symbol 'twitch-api-username))
+  ;; The first time this is called on `twitch-api-username' it will
+  ;; not have been assigned a value yet, so in this case just set it
+  ;; unconditionally.
+  (condition-case err
+      (when (not (equal username (symbol-value symbol)))
+	(set symbol username)
+	(setf twitch-api-user-id nil)
+	(setf twitch-api-oauth-token new-oauth-token))
+    (void-variable (set symbol username)))
+  username)
+
+(defcustom twitch-api-username nil
+  "A Twitch.tv username, for connecting to Twitch chat.
+Changing this variable invalidates `twitch-api-user-id' and
+`twitch-api-oauth-token' which are handled by
+`twitch-api-set-username'."
+  :group 'helm-twitch
+  :set 'twitch-api-set-username
+  :type '(choice (const nil)
+		 string))
 
 (defcustom twitch-api-client-id "d6hul5ut8dmqvl6tsa90254yzu8g612"
   "The Client ID for the application.
 
-If you want to use your own, you can register for for one at
-`https://github.com/justintv/Twitch-API'."
+If you want to use your own, you can register for one at
+`https://dev.twitch.tv/console/apps/create'."
   :group 'helm-twitch
   :type 'string)
 
@@ -70,6 +144,10 @@ If you want to use your own, you can register for for one at
 		       (url-hexify-string (format "%s" (nth 1 entry)))))
 	     (-partition 2 plist) "&"))
 
+(defun twitch-api-url-from-login (login)
+  "Return the url to the twitch stream given by LOGIN."
+  (concat "https://twitch.tv/" login))
+
 ;;;; Data Structures
 
 (cl-defstruct (twitch-api-stream (:constructor twitch-api-stream--create))
@@ -82,55 +160,65 @@ If you want to use your own, you can register for for one at
 
 ;;;; Authentication
 
+(defvar twitch-api-requested-scopes '("user:read:follows" "chat:read" "chat:edit")
+  "A list of scopes requested from the user.
+For more information see URL
+`https://dev.twitch.tv/docs/authentication#scopes'.")
+
+;;;###autoload
 (defun twitch-api-authenticate ()
-  "Retrieve an OAuth token for a Twitch.tv account through a
-browser."
+  "Retrieve an OAuth token for a Twitch.tv account with a browser.
+
+For more information see URL
+`https://dev.twitch.tv/docs/authentication/getting-tokens-oauth#oauth-implicit-code-flow'."
   (interactive)
-  (cl-assert twitch-api-client-id)
+  (unless twitch-api-client-id
+    (user-error "You must specify a client ID to retrieve an OAuth token"))
   (browse-url
-   (concat "https://api.twitch.tv/kraken/oauth2/authorize?response_type=token"
-	   "&client_id=" twitch-api-client-id
-	   "&redirect_uri=http://localhost"
-	   "&scope=user_read+user_follows_edit+chat_login"))
+   (concat twitch-api-oauth-url "?"
+	   (twitch-api--plist-to-url-params
+	    (list :client_id twitch-api-client-id
+		  :redirect_uri "http://localhost"
+		  :response_type "token"
+		  :scope (mapconcat #'identity twitch-api-requested-scopes " ")))))
   (let ((token (read-string "OAuth Token: ")))
     (if (equal token "")
-	(user-error "No token supplied. Aborting.")
+	(user-error "No token supplied. Aborting")
       (setq twitch-api-oauth-token token))))
 
 ;;;; API Wrappers
 
 ;;;###autoload
-(defun twitch-api (endpoint auth &rest plist)
+(defun twitch-api (endpoint &rest plist)
   "Query the Twitch API at ENDPOINT, returning the resulting JSON
-in a property list structure. When AUTH is non-nil, include the
-OAuth token in `twitch-api-oauth-token' in the request (if it
-exists).
+in a property list structure.
 
 Twitch API parameters can be passed in the property list PLIST.
 For example:
 
-    (twitch-api \"search/channels\" t :query \"flame\" :limit 15)
-"
+    (twitch-api \"search/channels\" :query \"flame\" :first 15)
+
+For more information see URL `https://dev.twitch.tv/docs/api'."
+  (unless twitch-api-client-id
+    (user-error "You must specify a Client ID to query Twitch's API"))
+  (unless twitch-api-oauth-token
+    (user-error "You must specify an OAuth token to query Twitch's API"))
   (let* ((params (twitch-api--plist-to-url-params plist))
-         (api-url (concat "https://api.twitch.tv/kraken/" endpoint "?" params))
+         (api-url (concat twitch-api-base-url endpoint "?" params))
          (curl-opts (list "--compressed" "--silent" "--location" "-D-"))
          (json-object-type 'plist) ;; Decode into a plist.
          (headers
           ;; Use a descriptive User-Agent.
           `(("User-Agent" . ,(format "twitch-api/%s Emacs/%s"
                                      twitch-api-version emacs-version))
-            ;; Use version 3 of the API.
-            ("Accept" . "application/vnd.twitchtv.v5+json"))))
+            ;; Use new version of API
+            ("Accept" . "application/json"))))
     ;; Support setting the method lexically, as with url.el.
     (when url-request-method
       (push (format "-X%s" url-request-method) curl-opts))
-	  ;; Add the Authorization ID (if present).
-    (when (and auth twitch-api-oauth-token)
-      (push `("Authorization" . ,(format "OAuth %s" twitch-api-oauth-token))
-            headers))
-	  ;; Add the Client ID (if present).
-	  (when twitch-api-client-id
-      (push `("Client-ID" . ,twitch-api-client-id) headers))
+    (push `("Authorization" . ,(format "Bearer %s" twitch-api-oauth-token))
+          headers)
+    (push `("Client-ID" . ,twitch-api-client-id) headers)
     ;; Wrap up arguments to curl.
     (dolist (header headers)
       (cl-destructuring-bind (key . value) header
@@ -154,105 +242,186 @@ For example:
             (let ((status (plist-get result ':status))
                   (err    (plist-get result ':error))
                   (errmsg (plist-get result ':message)))
-              (user-error "Twitch.tv API request failed: %d (%s)%s"
-                          status err (when errmsg (concat " - " errmsg)))))
+              (error "Twitch.tv API request failed: %d (%s)%s"
+                     status err (when errmsg (concat " - " errmsg)))))
           result)))))
+
+(cl-defun twitch-api-ensure-user-id (&optional (username twitch-api-username))
+  "Ensure that `twitch-api-user-id' is non-nil.
+If it isn't query `twitch-api' for the user ID corresponding to
+`twitch-api-username'.
+
+If USERNAME is not specified and `twitch-api-username' is nil,
+then the Twitch API will return the user info for the user
+associated with `twitch-api-oauth-token'.
+
+For convenience, this also sets `twitch-api-username'.
+
+For more information see URL
+`https://dev.twitch.tv/docs/api/reference#get-users'."
+  (if twitch-api-user-id
+      twitch-api-user-id
+    (cl-assert (or username twitch-api-oauth-token))
+    (let ((user (if username
+		    (twitch-api "users" :login username)
+		  (twitch-api "users"))))
+      (setf twitch-api-user-id (plist-get (aref (plist-get user :data)
+						0)
+					  :id))
+      (setf twitch-api-username (plist-get (aref (plist-get user :data)
+						 0)
+					   :login)))))
+
+(cl-defun twitch-api-ensure-game-id (&optional (game twitch-api-game-filter))
+  "Ensure that `twitch-api-game-filter-id' is non-nil.
+If it isn't query `twitch-api' for the game ID corresponding to
+`twitch-api-game-filter'.
+
+For more information see URL
+`https://dev.twitch.tv/docs/api/reference#get-games'."
+  (cl-assert game)
+  (if twitch-api-game-filter-id
+      twitch-api-game-filter-id
+    (setf twitch-api-game-filter-id (plist-get (aref (plist-get (twitch-api "games" :name game)
+								:data)
+						     0)
+					       :id))))
 
 ;;;###autoload
 (defun twitch-api-search-streams (search-term &optional limit)
   "Retrieve a list of Twitch streams that match the SEARCH-TERM.
 
-If LIMIT is an integer, pass that along to `twitch-api'."
-  (let* ((opts (if (integerp limit) '(:limit limit)))
-	 (opts (if twitch-api-game-filter
-		   (append '(:game twitch-api-game-filter) opts)
-		 opts))
-	 (opts (append `(:query ,search-term) opts))
-	 ;; That was really just a way of building up a plist of options to
-	 ;; pass to `twitch-api'...
-	 (results (eval `,@(append '(twitch-api "streams" nil) opts))))
-    (cl-loop for stream across (plist-get results ':streams) collect
-	     (let ((channel (plist-get stream ':channel)))
-	       (twitch-api-stream--create
-		:name    (plist-get channel ':name)
-		:viewers (plist-get stream ':viewers)
-		:status  (replace-regexp-in-string "[
-]" "" (plist-get channel ':status))
-		:game    (plist-get channel ':game)
-		:url     (plist-get channel ':url))))))
+If LIMIT is an integer, pass that along to `twitch-api'.
+Additionally, LIMIT must be less than or equal to 100.
+
+This function querys the same endpoint as
+`twitch-api-search-channels', but filters for live channels.
+
+For more information on this endpoint see URL
+`https://dev.twitch.tv/docs/api/reference#search-channels'."
+  (cl-assert (not (equal search-term "")))
+  (let ((args (list :query search-term :live_only 'true)))
+    (when (integerp limit)
+      (cl-assert (<= 1 limit 100) t)
+      (setf args (cl-list* :first limit args)))
+    (push "search/channels" args)
+    (cl-loop for stream across (plist-get (apply #'twitch-api args) :data)
+	     collect (twitch-api-stream--create
+		      :name    (plist-get stream :broadcaster_login)
+		      :status  (replace-regexp-in-string (rx (any ?\C-m ?\C-j)) ""
+							 (plist-get stream :title))
+		      :game    (plist-get stream :game_name)
+		      :url     (twitch-api-url-from-login (plist-get stream :broadcaster_login))))))
 
 ;;;###autoload
 (defun twitch-api-search-channels (search-term &optional limit)
   "Retrieve a list of Twitch channels that match the SEARCH-TERM.
 
-If LIMIT is an integer, pass that along to `twitch-api'."
-  (let* ((opts (if (integerp limit) '(:limit limit)))
-	 (opts (append `(:query ,search-term) opts))
-	 (results (eval `,@(append '(twitch-api "search/channels" nil) opts))))
-    (cl-loop for channel across (plist-get results ':channels) collect
-	     (twitch-api-channel--create
-	      :name      (plist-get channel ':name)
-	      :followers (plist-get channel ':followers)
-	      :game      (plist-get channel ':game)
-	      :url       (plist-get channel ':url)))))
+If LIMIT is an integer, pass that along to `twitch-api'.
+Additionally, LIMIT must be less than or equal to 100.
+
+For more information on this endpoint see URL
+`https://dev.twitch.tv/docs/api/reference#search-channels'."
+  (cl-assert (not (equal search-term "")) t)
+  (let ((args (list :query search-term)))
+    (when (integerp limit)
+      (cl-assert (<= 1 limit 100) t)
+      (setf args (cl-list* :first limit args)))
+    (push "search/channels" args)
+    (cl-loop for channel across (plist-get (apply #'twitch-api args) :data)
+	     collect (twitch-api-channel--create
+		      :name (plist-get channel :display_name)
+		      :game (plist-get channel :game_name)
+		      :url  (twitch-api-url-from-login (plist-get channel :broadcaster_login))))))
 
 ;;;###autoload
 (defun twitch-api-get-followed-streams (&optional limit)
   "Retrieve a list of Twitch streams that match the SEARCH-TERM.
 
-If LIMIT is an integer, pass that along to `twitch-api'."
-  (cl-assert twitch-api-oauth-token)
-  (let* ((opts (if (integerp limit) '(:limit limit)))
-	 (results (eval `,@(append
-			    '(twitch-api "streams/followed" t
-					 :stream_type "live")
-			    opts))))
-    (cl-loop for stream across (plist-get results ':streams) collect
-	     (let ((channel (plist-get stream ':channel)))
-	       (twitch-api-stream--create
-		:name    (plist-get channel ':name)
-		:viewers (plist-get stream ':viewers)
-		:status  (replace-regexp-in-string "[
-]" "" (plist-get channel ':status))
-		:game    (plist-get channel ':game)
-		:url     (plist-get channel ':url))))))
+If LIMIT is an integer, pass that along to `twitch-api'.
+Additionally, LIMIT must be less than or equal to 100.
 
-;;;###autoload
-(defun twitch-api-follow (stream &optional quiet unfollow)
-  "Adds STREAM to the following list for `twitch-api-username'.
-
-When QUIET is non-nil, suppress the notification message. When
-UNFOLLOW is non-nil, instead remove STREAM from the following
-list."
-  (cl-assert (and twitch-api-oauth-token twitch-api-username))
-  (let ((url-request-method (if unfollow "DELETE" "PUT"))
-	(stream (if (stringp stream) stream
-		  (twitch-api-stream-name stream))))
-    (twitch-api (concat "users/" twitch-api-username
-			"/follows/channels/" stream)
-		'auth)
-    (unless quiet
-      (message (if unfollow "%s is no longer following %s"
-		 "%s is now following %s")
-	       twitch-api-username stream))))
+For more information on this endpoint see URL
+`https://dev.twitch.tv/docs/api/reference#get-followed-streams'."
+  (unless twitch-api-oauth-token
+    (user-error "You must specify an OAuth token to view your followed streams"))
+  (twitch-api-ensure-user-id)
+  (let ((args (list :user_id twitch-api-user-id)))
+    (when (integerp limit)
+      (cl-assert (<= 1 limit 100) t)
+      (setf args (cl-list* :first limit args)))
+    (push "streams/followed" args)
+    (cl-loop for stream across (plist-get (apply #'twitch-api args) :data)
+	     collect (twitch-api-stream--create
+		      :name    (plist-get stream ':user_name)
+		      :viewers (plist-get stream ':viewer_count)
+		      :status  (replace-regexp-in-string (rx (any ?\C-m ?\C-j)) ""
+							 (plist-get stream ':title))
+		      :game    (plist-get stream ':game_name)
+		      :url     (twitch-api-url-from-login (plist-get stream :user_login))))))
 
 ;;;; Twitch Chat Interaction
 
+(defvar twitch-api-irc-endpoint-url "irc.chat.twitch.tv"
+  "The IRC URL initially used to join twitch chat.")
+
+(defvar twitch-api-irc-server-url "tmi.twitch.tv"
+  "The IRC URL used after initial connection.")
+
+(defun twitch-api-erc-ignore-004-response (_proc parsed)
+  "Ignore \"004\" responses from twitch.tv.
+
+Twitch's IRC server sends a malformed \"004\" response, which
+causes ERC to set `erc-server-announced-name' incorrectly.
+
+Example of correctly formed 004 response:
+\":calcium.libera.chat 004 <nick> calcium.libera.chat <version> <usermodes> <chanmodes> <chanmodes with parameter>\"
+
+Example of malformed 004 response from twitch:
+\":tmi.twitch.tv 004 <nick> :-\"
+
+For more information see URL
+`https://datatracker.ietf.org/doc/html/rfc2812#section-5.1', and
+URL
+`https://dev.twitch.tv/docs/irc/guide#connecting-to-twitch-irc'."
+  ;; `erc-server-004-functions' is run with
+  ;; `run-hook-with-args-until-success', so returning t prevents other
+  ;; functions in the hook from running
+  (if (equal (erc-response.sender parsed) twitch-api-irc-server-url)
+      t
+    nil))
+
 ;;;###autoload
 (defun twitch-api-open-chat (channel-name)
-  "Invokes `erc' to open Twitch chat for a given CHANNEL-NAME."
+  "Invokes `erc' to open Twitch chat for a given CHANNEL-NAME.
+
+If this doesn't connect, check if the chat is restricted in any
+way, For more information see URL
+`https://help.twitch.tv/s/article/how-to-manage-harassment-in-chat'.
+
+For more information on connecting to Twitch Chat with IRC, see
+URL `https://dev.twitch.tv/docs/irc/guide'."
   (interactive "sChannel: ")
-  (if (and twitch-api-username twitch-api-oauth-token)
-      (progn
-	(require 'erc)
-	(erc :server "irc.twitch.tv" :port 6667
-	     :nick (downcase twitch-api-username)
-	     :password (format "oauth:%s" twitch-api-oauth-token))
-	(erc-join-channel (format "#%s" (downcase channel-name))))
-    (when (not twitch-api-username)
-      (message "Set the variable `twitch-api-username' to connect to Twitch chat."))
-    (when (not twitch-api-oauth-token)
-      (message "Set the variable `twitch-api-oauth-token' to connect to Twitch chat."))))
+  (unless twitch-api-oauth-token
+    (user-error "Set the variable `twitch-api-oauth-token' to connect to Twitch chat"))
+  (unless twitch-api-username
+    (twitch-api-ensure-user-id))
+  (require 'erc)
+  ;; Use negative depth to run before usual hook
+  (add-hook 'erc-server-004-functions #'twitch-api-erc-ignore-004-response -75)
+  ;; Add closure to `erc-after-connect' and remove after running once.
+  ;; We assign the lambda to a symbol-function so it can be
+  ;; correctly compared by `equal' in `remove-hook'.
+  (let ((fun-symbol (gensym "hook-fun")))
+    (setf (symbol-function fun-symbol) `(lambda (server nick)
+					  (when (equal server twitch-api-irc-server-url)
+					    (unwind-protect
+						(erc-join-channel (format "#%s" (downcase ,channel-name)))
+					      (remove-hook 'erc-after-connect ',fun-symbol)))))
+    (add-hook 'erc-after-connect fun-symbol))
+  (erc :server twitch-api-irc-endpoint-url :port 6667
+       :nick (downcase twitch-api-username)
+       :password (format "oauth:%s" twitch-api-oauth-token)))
 
 ;;;; Top Streams Listing
 
