@@ -32,6 +32,10 @@
 (require 'json)
 (require 'tabulated-list)
 
+(defgroup twitch-api nil
+  "An elisp interface for the Twitch.tv API."
+  :group 'comm)
+
 (defconst twitch-api-version "0.2"
   "Version of this package to advertise in the User-Agent string.")
 
@@ -68,7 +72,7 @@ If necessary, invalidate `twitch-api-game-filter-id'."
   "If specified, limits the search to those streaming this game.
 Changing this variable invalidates `twitch-api-game-filter-id',
 which is handled by `twitch-api-set-game-filter'."
-  :group 'helm-twitch
+  :group 'twitch-api
   :set #'twitch-api-set-game-filter
   :type '(choice (const :tag "All games" nil)
 		 string))
@@ -86,7 +90,7 @@ information see URL
 
 To retrieve an OAuth token, call `twitch-api-authenticate', or
 visit URL `https://twitchapps.com/tmi/'."
-  :group 'helm-twitch
+  :group 'twitch-api
   :type 'string)
 
 (defun twitch-api-set-username (symbol username &optional new-oauth-token)
@@ -115,7 +119,7 @@ If NEW-OAUTH-TOKEN is given, set that."
 Changing this variable invalidates `twitch-api-user-id' and
 `twitch-api-oauth-token' which are handled by
 `twitch-api-set-username'."
-  :group 'helm-twitch
+  :group 'twitch-api
   :set 'twitch-api-set-username
   :type '(choice (const nil)
 		 string))
@@ -125,12 +129,12 @@ Changing this variable invalidates `twitch-api-user-id' and
 
 If you want to use your own, you can register for one at
 `https://dev.twitch.tv/console/apps/create'."
-  :group 'helm-twitch
+  :group 'twitch-api
   :type 'string)
 
 (defcustom twitch-api-curl-binary "curl"
   "Location of the curl program."
-  :group 'helm-twitch
+  :group 'twitch-api
   :type 'string)
 
 ;;;; Utilities
