@@ -372,21 +372,21 @@ For more information on this endpoint see URL
   "The IRC URL used after initial connection.")
 
 (defun twitch-api-erc-ignore-004-response (_proc parsed)
-  "Ignore \"004\" responses from twitch.tv.
+  "Ignore \"004\" responses from twitch.tv, using PARSED for identification.
 
 Twitch's IRC server sends a malformed \"004\" response, which
 causes ERC to set `erc-server-announced-name' incorrectly.
 
 Example of correctly formed 004 response:
-\":calcium.libera.chat 004 <nick> calcium.libera.chat <version> <usermodes> <chanmodes> <chanmodes with parameter>\"
+\":calcium.libera.chat 004 <nick> calcium.libera.chat <version>
+<usermodes> <chanmodes> <chanmodes with parameter>\"
 
 Example of malformed 004 response from twitch:
 \":tmi.twitch.tv 004 <nick> :-\"
 
-For more information see URL
-`https://datatracker.ietf.org/doc/html/rfc2812#section-5.1', and
-URL
-`https://dev.twitch.tv/docs/irc/guide#connecting-to-twitch-irc'."
+For more information see
+URL `https://datatracker.ietf.org/doc/html/rfc2812#section-5.1', and
+URL `https://dev.twitch.tv/docs/irc/guide#connecting-to-twitch-irc'."
   ;; `erc-server-004-functions' is run with
   ;; `run-hook-with-args-until-success', so returning t prevents other
   ;; functions in the hook from running
