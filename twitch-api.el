@@ -60,7 +60,7 @@ If necessary, invalidate `twitch-api-game-filter-id'."
   ;; The first time this is called on `twitch-api-game-filter', it
   ;; will not have been assigned a value yet, so in this case just set
   ;; it unconditionally.
-  (condition-case err
+  (condition-case _err
       (when (not (equal game (symbol-value symbol)))
 	(set symbol game)
 	(setf twitch-api-game-filter-id nil))
@@ -105,7 +105,7 @@ If NEW-OAUTH-TOKEN is given, set that."
   ;; The first time this is called on `twitch-api-username' it will
   ;; not have been assigned a value yet, so in this case just set it
   ;; unconditionally.
-  (condition-case err
+  (condition-case _err
       (when (not (equal username (symbol-value symbol)))
 	(set symbol username)
 	(setf twitch-api-user-id nil)
