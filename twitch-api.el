@@ -57,14 +57,11 @@ If necessary, invalidate `twitch-api-game-filter-id'."
 		 (equal 'string (type-of game)))
 	     t)
   (setf symbol (or symbol 'twitch-api-game-filter))
-  ;; The first time this is called on `twitch-api-game-filter', it
-  ;; will not have been assigned a value yet, so in this case just set
-  ;; it unconditionally.
-  (condition-case _err
+  (if (boundp symbol)
       (when (not (equal game (symbol-value symbol)))
 	(set symbol game)
 	(setf twitch-api-game-filter-id nil))
-    (void-variable (set symbol game)))
+    (set symbol game))
   game)
 
 (defcustom twitch-api-game-filter nil
@@ -102,15 +99,12 @@ If NEW-OAUTH-TOKEN is given, set that."
 		 (equal 'string (type-of username)))
 	     t)
   (setf symbol (or symbol 'twitch-api-username))
-  ;; The first time this is called on `twitch-api-username' it will
-  ;; not have been assigned a value yet, so in this case just set it
-  ;; unconditionally.
-  (condition-case _err
+  (if (boundp symbol)
       (when (not (equal username (symbol-value symbol)))
 	(set symbol username)
 	(setf twitch-api-user-id nil)
 	(setf twitch-api-oauth-token new-oauth-token))
-    (void-variable (set symbol username)))
+    (set symbol username))
   username)
 
 (defcustom twitch-api-username nil
